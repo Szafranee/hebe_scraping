@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import random
 import time
 from dataclasses import dataclass
 from typing import List, Tuple
@@ -42,6 +43,7 @@ async def extract_product_details(session: aiohttp.ClientSession, product_url: s
                 ingredients = ingredients_content.get_text(strip=True) if ingredients_content else 'No ingredients information'
                 # Use join-split method for better whitespace handling
                 ingredients = ' '.join(ingredients.split())
+                ingredients = ingredients.replace('\u200b', '').replace('\u000a0', '')
             else:
                 ingredients = 'No ingredients information'
 
@@ -142,7 +144,7 @@ async def scrape_products(max_pages: int = None) -> List[Product]:
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
-    connector = aiohttp.TCPConnector(limit=10)
+    connector = aiohttp.TCPConnector(limit=5)
     timeout = aiohttp.ClientTimeout(total=30)
 
     total_start_time = time.time()
@@ -207,7 +209,7 @@ async def scrape_products(max_pages: int = None) -> List[Product]:
                         f"est. remaining: {estimated_remaining if isinstance(estimated_remaining, str) else f'{estimated_remaining:.2f}s'}")
 
             page += 1
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(random.uniform(1, 3))  # Random sleep to avoid being blocked
 
         total_time = time.time() - total_start_time
         avg_page_time = total_page_time / page if page > 0 else 0
