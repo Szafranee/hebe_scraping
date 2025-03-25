@@ -21,7 +21,7 @@ class Product:
     price: str
     ingredients: str
     photo_url: str
-
+    id: str = None
 
 async def extract_product_details(session: aiohttp.ClientSession, product_url: str, headers: dict) -> Tuple[str, str]:
     """
@@ -55,7 +55,7 @@ async def extract_product_details(session: aiohttp.ClientSession, product_url: s
 
             return ingredients, photo_url
     except Exception as e:
-        logger.error(f"Error extracting product details: {e}")
+        logger.error(f"Error extracting product details: {e}. Product: {product_url}")
         return 'Error loading', 'Error loading'
 
 
@@ -75,6 +75,9 @@ async def process_product(session: aiohttp.ClientSession, product_tile: Beautifu
         name = product_data.get('item_name', 'No name')
         price = product_data.get('price', 'No price')
 
+        # Extract product ID for tracking
+        product_id = product_data.get('item_id', None)
+
         # Get product details URL
         product_link = product_tile.find('a', class_='product-tile__image').get('href')
         product_url = f'https://www.hebe.pl/{product_link}'
@@ -82,7 +85,7 @@ async def process_product(session: aiohttp.ClientSession, product_tile: Beautifu
         # Get detailed product information
         ingredients, photo_url = await extract_product_details(session, product_url, headers)
 
-        return Product(name, price, ingredients, photo_url)
+        return Product(name, price, ingredients, photo_url, id=product_id)
     except Exception as e:
         logger.error(f"Error processing product: {e}")
         return None
@@ -96,7 +99,7 @@ async def scrape_page(session: aiohttp.ClientSession, page: int, headers: dict) 
         Tuple containing list of products and time taken to scrape the page
     """
     BASE_URL = 'https://www.hebe.pl/pielegnacja-wlosow-szampony/'
-    url = f'{BASE_URL}?start={page * 24}'
+    url = f'{BASE_URL}?start={page * 21}'
 
     start_time = time.time()
 
@@ -148,6 +151,8 @@ async def scrape_products(max_pages: int = None) -> List[Product]:
         all_products = []
         page = 0
         total_page_time = 0
+        seen_product_ids = set()  # Track seen product IDs
+        first_page_product_ids = set()  # Store first page product IDs
 
         logger.info(f"Starting scraping process...")
 
@@ -162,16 +167,41 @@ async def scrape_products(max_pages: int = None) -> List[Product]:
             total_page_time += page_time
 
             if not products:
+                logger.info(f"No products found on page {page + 1}, stopping")
                 break
 
-            all_products.extend(products)
+            # Check for pagination loop by tracking product IDs
+            current_page_ids = {product.id for product in products}
+
+            # Store first page product IDs for later comparison
+            if page == 0:
+                first_page_product_ids = current_page_ids
+                logger.info(f"Stored {len(first_page_product_ids)} product IDs from first page")
+            # For subsequent pages, check if we've looped back to the first page
+            elif page > 0 and current_page_ids.intersection(first_page_product_ids):
+                overlap = current_page_ids.intersection(first_page_product_ids)
+                logger.info(f"Found {len(overlap)} products from first page, pagination has looped. Stopping.")
+                break
+
+            # Filter out products we've already seen
+            new_products = [p for p in products if p.id not in seen_product_ids]
+
+            if not new_products:
+                logger.info(f"All products on page {page + 1} have been seen before, stopping")
+                break
+
+            # Add new product IDs to our seen set
+            for product in new_products:
+                seen_product_ids.add(product.id)
+
+            all_products.extend(new_products)
 
             # Calculate statistics
             avg_product_time = page_time / len(products) if products else 0
             total_elapsed = time.time() - total_start_time
             estimated_remaining = (avg_product_time * (max_pages - page - 1) * 24) if max_pages else "unknown"
 
-            logger.info(f"Page {page + 1}: {len(products)} products in {page_time:.2f}s "
+            logger.info(f"Page {page + 1}: {len(new_products)} new products in {page_time:.2f}s "
                         f"({avg_product_time:.2f}s per product)")
             logger.info(f"Progress: {len(all_products)} total products, {total_elapsed:.2f}s elapsed, "
                         f"est. remaining: {estimated_remaining if isinstance(estimated_remaining, str) else f'{estimated_remaining:.2f}s'}")
@@ -197,9 +227,9 @@ def save_products_to_csv(products: List[Product], filename: str = 'products.csv'
     start_time = time.time()
 
     with open(filename, 'w', encoding='utf-8') as file:
-        file.write('Name;Price;Ingredients;Photo URL\n')
+        file.write('Name;Price;Ingredients;Photo URL;\n')
         for product in products:
-            file.write(f'{product.name};{product.price};{product.ingredients};{product.photo_url}\n')
+            file.write(f'{product.name};{product.price};{product.ingredients};{product.photo_url};\n')
 
     elapsed = time.time() - start_time
     logger.info(f"Saved {len(products)} products to {filename} in {elapsed:.2f}s")
